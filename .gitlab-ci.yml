@@ -1,0 +1,22 @@
+stages:
+  - sharedrunners
+  
+variables:
+  ROLEARN: arn:aws:iam::842337631775:role/gitlab-runner-role
+  REGION: us-west-2
+
+Update_sharedrunners:
+
+  stage: sharedrunners
+  image: registry.gitlab.com/1strategy/internal/infrastructure/gitlab/custom-images:awscli
+  script:
+    - aws cloudformation update-stack --stack-name gitlab-shared-runners --role-arn $ROLEARN --template-body file://shared-runner.template --parameters file://shared-runner.json --capabilities CAPABILITY_NAMED_IAM  --region $REGION
+  only:
+    refs:
+      - sandbox
+    changes:
+      - "shared-runner.*"
+  tags:
+    - docker
+    - us-west-2
+    - sandbox

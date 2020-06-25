@@ -1,0 +1,177 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Shared gitlab runner"
+
+# Parameters section - read from the shared-runner.json file
+Parameters:
+  Environment:
+    Type: String
+    Default: sandbox
+  VpcId:
+    Type: String
+    Default: vpc-0b78437654449492e
+  PrivateSubnetId:
+    Type: String
+    Default: subnet-041c62a446cb0b006
+  InstanceSize:
+    Type: String
+    Default: t3.medium
+  AmiId:
+    Type: String
+    Default: ami-0d6621c01e8c2de2c
+  KeyPairName:
+    Type: String
+    Default: gitlab-runner-keypair
+
+# Creation of an autoscaling group for the shared runners that will redeploy every Sunday night at 11pm
+Resources:
+  RunnerLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      KeyName: !Ref KeyPairName
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceSize
+      IamInstanceProfile: !Ref ServerInstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: "/dev/xvda"
+          Ebs: { "VolumeSize": "150" }
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+          sudo su -
+          yum update -y
+          amazon-linux-extras install docker
+          sleep 10s
+          service docker start
+          systemctl enable docker
+          sleep 10s
+          wget -O /usr/local/bin/gitlab-runner "https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-linux-amd64"
+          sleep 30s
+          chmod +x /usr/local/bin/gitlab-runner
+          useradd --comment 'GitLab Runner' --create-home gitlab-runner --shell /bin/bash
+          cd /usr/local/bin
+          gitlab-runner install --user=gitlab-runner --working-directory=/home/gitlab-runner
+          gitlab-runner start
+          gitlab-runner register --non-interactive --url "https://gitlab.com/" --registration-token "gHxsgEvcwH32gJQ8avpU" --executor "docker" --docker-image "alpine:latest" --locked="false" --tag-list "shared-runner,docker,us-west-2,sandbox" --description "gitlab-shared-runner"
+
+      SecurityGroups:
+        - !Ref InstanceSecurityGroup
+
+  RunnerAutoScaling:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub GitLab-Shared-Runner-${Environment}
+      AvailabilityZones: [us-west-2a]
+      DesiredCapacity: 1
+      LaunchConfigurationName: !Ref RunnerLaunchConfig
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetId
+      HealthCheckType: EC2
+      MaxSize: 1
+      MinSize: 1
+      Tags:
+        - Key: Name
+          PropagateAtLaunch: true
+          Value: !Sub gitlab-shared-runner-${Environment}
+  ScheduledScaleOut:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref RunnerAutoScaling
+      MaxSize: 1
+      MinSize: 1
+      Recurrence: "0 7 * * *"
+  ScheduleScaleIn:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref RunnerAutoScaling
+      MaxSize: 0
+      MinSize: 0
+      Recurrence: "0 19 * * *"
+      
+  SharedRunnerIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: "gitlab-shared-runner-iam-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: "SharedRunnerPipelineAccess"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: "GeneralServices"
+                Effect: "Allow"
+                Action: 
+                  - ssm:*
+                  - dynamodb:*
+                  - kms:*
+                  - sns:*
+                  - sqs:*
+                  - cloudwatch:*
+                  - apigateway:*
+                  - cloudformation:*
+                  - iam:getrole
+                  - iam:createrole
+                  - iam:updaterole
+                  - iam:AttachRolePolicy
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:CreateServiceLinkedRole
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:ListInstanceProfilesForRole
+                  - iam:PutRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:DeleteRole
+                  - iam:PassRole
+                  - iam:get*
+                  - logs:*
+                  - lambda:*
+                  - s3:*
+                  - ec2:*
+                  - rds:*
+                  - ecr:*
+                  - eks:*
+                  - ecs:*
+                  - glue:*
+                  - elasticloadbalancing:*
+                  - route53:Get*
+                  - route53:ChangeResourceRecordSets
+                  - route53:List*
+                  - kinesis:*
+                  - firehose:*
+                  - events:*
+                  - lakeformation:*
+                  - states:*
+                  - secretsmanager:*
+                  - appsync:*
+                  - autoscaling:*
+                Resource: "*"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+        
+  ServerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref SharedRunnerIamRole
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Gitlab shared runner SG"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.0.0/16
+      VpcId: !Ref VpcId

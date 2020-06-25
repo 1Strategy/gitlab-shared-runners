@@ -1,0 +1,8 @@
+[
+    { "ParameterKey": "Environment", "ParameterValue": "sandbox" },
+    { "ParameterKey": "VpcId", "ParameterValue": "vpc-0dd8b784a0fd18dc4" },
+    { "ParameterKey": "PrivateSubnetId", "ParameterValue": "subnet-0744aa1db922d85d4" },
+    { "ParameterKey": "AmiId", "ParameterValue": "ami-0d6621c01e8c2de2c" },
+    { "ParameterKey": "InstanceSize", "ParameterValue": "t3.medium" },
+    { "ParameterKey": "KeyPairName", "ParameterValue": "gitlab-runner-keypair" }
+]
